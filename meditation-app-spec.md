@@ -4,7 +4,7 @@
 
 A cross-platform mobile application built with React Native that allows users to generate fully personalized, AI-narrated meditation sessions on demand. The user describes their current mood or desired outcome in natural language, and the app produces a custom meditation script via Google Gemini and reads it aloud using a text-to-speech API.
 
-> **Development & Testing:** Development Builds (via `npx expo run:ios` / `npx expo run:android`) are used for all on-device testing. Expo GO is not used — `expo-audio` ships native code that is not bundled into the standard Expo GO client and will cause an immediate crash on launch if Expo GO is used.
+> **Development & Testing:** Day-to-day on-device testing uses **Expo Go** (`npx expo start`, then scan the QR code on the phone). As of SDK 56, every package in the prototype stack — `expo-audio`, `expo-router`, `@supabase/supabase-js`, AsyncStorage, Zustand — is included in Expo Go, so no development build is required for the prototype. A Development Build becomes necessary only when native code outside Expo Go is added (e.g., Google Sign-In, post-prototype) and for store distribution. Build commands at that point: `npx expo run:android` locally (requires Android Studio), and EAS Build for iOS — `npx expo run:ios` requires macOS/Xcode and cannot run on a Windows development machine.
 
 ---
 
@@ -31,16 +31,16 @@ A cross-platform mobile application built with React Native that allows users to
 | Layer | Technology |
 |---|---|
 | Mobile Framework | React Native |
-| On-Device Testing | Expo Development Build (`npx expo run:ios` / `npx expo run:android`) — required because `expo-audio` includes native code not bundled in Expo GO |
+| On-Device Testing | Expo Go for the prototype (entire stack is included in Expo Go on SDK 56). Development Build (`npx expo run:android` locally; EAS Build for iOS from Windows) only once native modules outside Expo Go are added |
 | Language | TypeScript |
-| Navigation | Expo Router (v4+) |
-| Authentication | Supabase Authentication (email/password, Google Sign-In) |
+| Navigation | Expo Router (bundled with SDK 56 — `~56.2.x`; Expo now uses unified SDK versioning, so `expo-*` package versions track the SDK number, not standalone majors like "v4") |
+| Authentication | Supabase Authentication (email/password; Google Sign-In is post-prototype) |
 | Backend / Database | Supabase (user profiles, session history) |
-| AI Script Generation | Google Gemini API |
+| AI Script Generation | Google Gemini API via the `@google/genai` SDK (the older `@google/generative-ai` SDK is deprecated) |
 | Text-to-Speech | ElevenLabs |
 | Backend Proxy | Supabase Edge Functions (all external API calls route through here) |
 | State Management | Zustand (v5.x) with Immer middleware |
-| Audio Playback | expo-audio (replaces deprecated expo-av; requires a Development Build — not compatible with Expo GO) |
+| Audio Playback | expo-audio (replaces deprecated expo-av; included in Expo Go on SDK 56) |
 | Audio Storage | Supabase Storage (Edge Function uploads generated MP3 here; app receives a signed URL) |
 | Environment/Secrets | Supabase Secrets (`supabase secrets set`) for server-side keys; `EXPO_PUBLIC_*` variables in `.env` for Supabase URL/publishable key (accessed via `process.env.EXPO_PUBLIC_SUPABASE_URL` — no expo-constants needed) |
 
@@ -64,7 +64,7 @@ A cross-platform mobile application built with React Native that allows users to
 - Options: **Log In** or **Create Account**
 
 ### 5.2 Authentication
-- **Create Account:** Email, password, display name; email verification optional for prototype
+- **Create Account:** Email, password, display name; email verification optional for prototype (disable "Confirm email" in the Supabase Auth dashboard for the prototype — otherwise new sign-ups cannot log in until they click the verification link)
 - **Log In:** Email + password
 - **Forgot Password:** Password reset via email (Supabase)
 - On success, navigate to the Home screen
@@ -114,13 +114,13 @@ A cross-platform mobile application built with React Native that allows users to
 - FR-TTS-01: The generated script must be sent to the ElevenLabs TTS API and returned as audio.
 - FR-TTS-02: The user must be able to play, pause, and replay the audio.
 - FR-TTS-03: A progress indicator must display the current position of the audio.
-- FR-TTS-04: Audio must play through the device speaker by default, with headphone support.
+- FR-TTS-04: Audio must play through the device speaker by default, with headphone support. On iOS, `setAudioModeAsync({ playsInSilentMode: true })` (from `expo-audio`) must be called once at app startup — without it, playback is silently muted whenever the hardware ring/silent switch is set to silent, which presents as "audio doesn't play" with no error.
 - FR-TTS-05: The app must display an error message if the TTS API call fails.
 
 ### 6.4 Navigation
-- FR-NAV-01: Unauthenticated users must be redirected to the Auth screen. Implemented in the root layout (`app/_layout.tsx`) by checking `authStore` and calling `router.replace('/login')` via Expo Router's `useRouter()` hook inside a `useEffect`. No `<PrivateRoute>` wrapper is needed — Expo Router's layout system handles this at the route group level.
+- FR-NAV-01: Unauthenticated users must never be able to reach `(app)` routes. Implemented with Expo Router's **`Stack.Protected`** guards in the root layout (`app/_layout.tsx`): `<Stack.Protected guard={!!session}>` wraps the `(app)` group screen and `<Stack.Protected guard={!session}>` wraps the `(auth)` group screen, with the guard condition read from `authStore`. This is the officially recommended pattern (SDK 53+) — do **not** use the older `router.replace('/login')`-inside-`useEffect` approach, and no `<PrivateRoute>` wrapper is needed. When auth state changes, the guard automatically redirects.
 - FR-NAV-02: Authenticated users must land on the Home screen after login.
-- FR-NAV-03: The back button on the Playback screen must stop audio before navigating away. Implemented via a `useEffect` cleanup function that unloads the `expo-audio` player when the component unmounts.
+- FR-NAV-03: The back button on the Playback screen must stop audio before navigating away. Implemented via a `useEffect` cleanup function that calls the `audioStore`'s `unload()` action (which calls `player.remove()` on the store-owned player — see §9.13) when the component unmounts.
 
 ---
 
@@ -179,7 +179,7 @@ React Native App receives signed URL and loads it with expo-audio
 
 > **Why two Edge Functions?** A single function running Gemini + ElevenLabs sequentially for a 10–15 minute meditation risks hitting Supabase's 150-second Edge Function timeout. Splitting also lets the UI show the generated script immediately while audio is still being synthesized.
 >
-> **Why Supabase Storage for audio?** ElevenLabs returns raw audio bytes. Supabase Edge Function invocations via `supabase.functions.invoke()` have a ~2 MB response size limit — a 10-minute MP3 easily exceeds this. Uploading to Supabase Storage and returning a signed URL sidesteps this limit entirely, and `expo-audio` can stream from a URL natively.
+> **Why Supabase Storage for audio?** ElevenLabs returns raw audio bytes, and a 10-minute MP3 is many megabytes — returning multi-megabyte binary payloads through `supabase.functions.invoke()` is slow, memory-hungry in the function, and not seekable. Uploading to Supabase Storage and returning a signed URL sidesteps this entirely, persists the audio for replay, and lets `expo-audio` stream (and seek) from the URL natively.
 >
 > **Signed URL expiration risk:** The 1-hour signed URL is long enough for active playback, but a user who pauses and returns 61+ minutes later will receive a network error from `expo-audio` when they resume. The `audioStore` guards against this: when the user taps Play, it checks whether `Date.now() - urlGeneratedAt > 45 * 60 * 1000` (45 minutes). If the threshold is exceeded, it fetches a fresh signed URL from Supabase Storage before resuming. See Section 9.13.
 
@@ -196,14 +196,14 @@ React Native App receives signed URL and loads it with expo-audio
 - Fetching the script from the sessions table using the provided `sessionId` — verifying it belongs to the authenticated user
 - Reading the ElevenLabs API key from Supabase Secrets
 - Calling ElevenLabs TTS and uploading the MP3 bytes to Supabase Storage
-- Updating the session record with the generated audio URL
+- Updating the session record with the Storage **object path** (`audio_path`, e.g. `{userId}/{sessionId}.mp3`) — never persist the signed URL itself in the DB, since it expires in 1 hour and would be dead on any later read
 - Returning `{ audioUrl: string }` (a signed URL) or a structured error response
 
 ---
 
 ### 8.2 API Security Requirements
 
-Every invocation of the `/generate-meditation` Edge Function must pass the following checks in order:
+Every invocation of the `/generate-script` and `/synthesize-audio` Edge Functions must pass the following checks in order:
 
 | # | Check | Action on Failure |
 |---|---|---|
@@ -217,25 +217,28 @@ Every invocation of the `/generate-meditation` Edge Function must pass the follo
 - All tables storing prompts or generated scripts must have Row Level Security (RLS) enabled in Supabase so users can only read and write their own records.
 - Gemini and ElevenLabs API keys must be stored exclusively via `supabase secrets set` and accessed as environment variables inside the Edge Function — never passed from the client.
 - The React Native app transmits only the Supabase URL and publishable key (both safe to expose publicly per Supabase's design); RLS and JWT verification enforce actual access control.
+- The audio Storage bucket must be **private**. Objects are uploaded under a `{userId}/{sessionId}.mp3` path, and a `storage.objects` RLS policy must allow authenticated users to read (and therefore create signed URLs for) only objects under their own `{userId}/` prefix. This policy is what makes the client-side `refreshAudioUrl` call in §9.13 work.
+- Rate-limit counter updates (SEC-03) must be atomic — use a single `INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING` statement or a Postgres function (RPC), not a read-then-write from the Edge Function, to avoid race conditions letting users exceed the limit.
 
 ---
 
 ### 8.3 Google Gemini API
-- **Model:** `gemini-2.5-flash` (use `@google/generative-ai` SDK inside the Edge Function)
+- **SDK:** `@google/genai` — the current official SDK. Do **not** use `@google/generative-ai`; it is the deprecated legacy SDK, no longer receives new-model support, and has a different API surface (`GoogleGenerativeAI` / `getGenerativeModel()`), so mixing the two produces code that compiles against neither.
+- **Model:** `gemini-2.5-flash`. Verify the current recommended flash-tier model name against https://ai.google.dev/gemini-api/docs at implementation time — Google's docs now feature newer models, and hardcoding a retired model name is a silent runtime failure.
 - **Auth:** API key read from Supabase Secrets as `GEMINI_API_KEY`
-- **Deno import:** Supabase Edge Functions run on Deno, not Node.js. Use the `npm:` specifier — bare package names and `require()` are not supported:
-- **Request shape:** Use the SDK's `systemInstruction` top-level field (separate from `contents`) for the system prompt, and pass the user's prompt as the first `user` turn in `contents`. Do **not** concatenate the system prompt into the `contents` array — the model treats `systemInstruction` and `contents` differently.
+- **Deno import:** Supabase Edge Functions run on Deno, not Node.js. Use the `npm:` specifier — bare package names and `require()` are not supported.
+- **Request shape:** Pass the system prompt via `config.systemInstruction` (separate from `contents`), and the user's prompt as `contents`. Do **not** concatenate the system prompt into `contents` — the model treats them differently.
 
 ```typescript
-import { GoogleGenAI } from "npm:@google/generative-ai";
+import { GoogleGenAI } from "npm:@google/genai";
 
-const genAI = new GoogleGenAI(Deno.env.get('GEMINI_API_KEY')!);
-const model = genAI.getGenerativeModel({
+const ai = new GoogleGenAI({ apiKey: Deno.env.get('GEMINI_API_KEY')! });
+const response = await ai.models.generateContent({
   model: 'gemini-2.5-flash',
-  systemInstruction: SYSTEM_PROMPT,
+  contents: userPrompt,
+  config: { systemInstruction: SYSTEM_PROMPT },
 });
-const result = await model.generateContent(userPrompt);
-const script = result.response.text();
+const script = response.text; // property, not a method — .text() is the old SDK
 ```
 
 - **System instruction (draft):**
@@ -258,26 +261,31 @@ This application uses Zustand (v5.x) as the sole client-side state management so
 
 ### 9.2 Dependencies
 
+The versions below reflect what is **already installed** in `package.json` (Expo SDK 56). SDK 56 uses unified versioning — `expo-*` packages share the SDK version number, so standalone majors like `expo-audio 0.4.x` or `expo-router 4.x` no longer exist.
+
 ```json
 {
   "dependencies": {
-    "zustand": "^5.x",
-    "immer": "^10.x",
-    "@supabase/supabase-js": "^2.x",
-    "expo-audio": "~0.4.x",
-    "@react-native-async-storage/async-storage": "^2.x",
-    "expo-router": "^4.x"
+    "expo": "~56.0.12",
+    "expo-audio": "~56.0.12",
+    "expo-router": "~56.2.11",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "zustand": "^5.0.14",
+    "immer": "^11.1.8",
+    "@supabase/supabase-js": "^2.108.2",
+    "@react-native-async-storage/async-storage": "2.2.0"
   },
   "devDependencies": {
-    "typescript": "^5.x",
-    "@types/react": "~18.x",
-    "jest": "^29.x",
-    "@testing-library/react-native": "^12.x"
+    "typescript": "~6.0.3",
+    "@types/react": "~19.2.2",
+    "jest": "^30.4.2",
+    "@testing-library/react-native": "^14.0.1"
   }
 }
 ```
 
-> `expo-av` is deprecated — use `expo-audio` for audio playback. `expo-router` v4 is the standard Expo navigation solution; it provides file-based routing, native stack transitions, and deep linking out of the box. `react-router-native` has been removed from the stack.
+> **Rules:** Add or upgrade any Expo/native package with `npx expo install <pkg>` (never plain `npm install`) so versions stay aligned with SDK 56. `expo-av` is deprecated — use `expo-audio`. `react-router-native` has been removed from the stack. For testing, install the `jest-expo` preset (`npx expo install jest-expo -- --save-dev`) and set `"preset": "jest-expo"` in the Jest config — bare Jest cannot transform React Native / Expo modules.
 
 No code generation step is required. Zustand stores are plain TypeScript modules.
 
@@ -295,13 +303,13 @@ Repository Layer → plain TypeScript modules called by store actions; never imp
 
 ```
 app/
-├── _layout.tsx                       # Root layout — Supabase auth listener, redirects to (auth) if unauthenticated
+├── _layout.tsx                       # Root layout — Supabase auth listener + Stack.Protected guards for (auth)/(app) groups
 ├── (auth)/
 │   ├── _layout.tsx                   # Auth group layout (no tab bar)
 │   ├── login.tsx                     # Log in screen
 │   └── register.tsx                  # Create account screen
 └── (app)/
-    ├── _layout.tsx                   # Protected layout — redirects to /login if unauthenticated
+    ├── _layout.tsx                   # App group layout (stack/tabs) — access already guarded by Stack.Protected in root
     ├── index.tsx                     # Home screen
     ├── prompt.tsx                    # Meditation prompt screen
     ├── playback.tsx                  # Playback screen
@@ -332,7 +340,7 @@ src/
 | User input / simple UI state | `useState` (local) or a store slice if shared across screens |
 | Async API call (Gemini, ElevenLabs) | Zustand async action with a typed `status` field |
 | Real-time Supabase data | `useEffect` + `supabase.channel().on()` subscription, cleaned up on unmount |
-| Audio playback state | `audioStore` backed by an `expo-audio` `useAudioPlayer` instance |
+| Audio playback state | `audioStore` owning a player created with `expo-audio`'s **`createAudioPlayer()`** (the imperative API — `useAudioPlayer` is a React hook and cannot live inside a store); released via `player.remove()` in the store's `unload()` action |
 | Derived / computed values | Selector functions passed inline to `useStore(selector)` — not stored in state |
 
 ### 9.6 Store Shape Convention
@@ -368,7 +376,7 @@ import { generateScript } from '../repositories/geminiRepository';
 import { synthesizeSpeech } from '../repositories/elevenLabsRepository';
 
 export const useMeditationStore = create<MeditationStore>()(
-  immer((set) => ({
+  immer((set, get) => ({
     prompt: '',
     sessionId: null,
     script: null,
@@ -380,8 +388,11 @@ export const useMeditationStore = create<MeditationStore>()(
     setPrompt: (prompt) => set((state) => { state.prompt = prompt; }),
 
     generate: async (prompt, durationMinutes) => {
+      // Re-entrancy guard: ignore double-taps on Generate while a run is in flight
+      if (get().scriptStatus === 'loading' || get().audioStatus === 'loading') return;
       set((state) => {
         state.scriptStatus = 'loading';
+        state.audioStatus = 'idle';
         state.error = null;
       });
       let sessionId: string;
@@ -468,8 +479,9 @@ useEffect(() => {
 ### 9.9 Supabase Integration Rules
 
 - The Supabase client must be instantiated once in `src/lib/supabaseClient.ts` and imported from there everywhere. Never call `createClient()` more than once in the app.
+- The client must be configured for React Native: `createClient(url, key, { auth: { storage: AsyncStorage, autoRefreshToken: true, persistSession: true, detectSessionInUrl: false } })`. Without `storage: AsyncStorage`, sessions do not survive app restarts and FR-AUTH-03 fails. Additionally, wire React Native's `AppState` to call `supabase.auth.startAutoRefresh()` on foreground and `stopAutoRefresh()` on background so tokens keep refreshing reliably.
 - Auth state must be initialized in `app/_layout.tsx` by subscribing to `supabase.auth.onAuthStateChange` and writing updates into `authStore`. Unsubscribe in the cleanup effect.
-- Auth-gated routes must be protected in `app/(app)/_layout.tsx` by reading `authStore` and calling `router.replace('/login')` — individual screen components must not implement their own auth redirect logic.
+- Auth-gated routes must be protected via `Stack.Protected` guards in the root layout (`app/_layout.tsx`), with the guard condition read from `authStore` (see FR-NAV-01) — individual screen components and group layouts must not implement their own auth redirect logic.
 - Real-time Supabase subscriptions must be started in a `useEffect` and cleaned up in the `useEffect` return function to prevent listener leaks.
 
 ### 9.10 Error Handling Rules
@@ -493,11 +505,15 @@ jest.mock('../repositories/elevenLabsRepository');
 const initialState = useMeditationStore.getState();
 
 beforeEach(() => {
-  useMeditationStore.setState(initialState);
+  useMeditationStore.setState(initialState, true); // replace, don't merge
 });
 
 it('sets scriptStatus to success on valid Gemini response', async () => {
-  (geminiRepository.generateScript as jest.Mock).mockResolvedValue('A calm meditation...');
+  // generateScript resolves { sessionId, script } — NOT a bare string (see §8.1)
+  (geminiRepository.generateScript as jest.Mock).mockResolvedValue({
+    sessionId: 'session-123',
+    script: 'A calm meditation...',
+  });
   (elevenLabsRepository.synthesizeSpeech as jest.Mock).mockResolvedValue('https://audio.url/file.mp3');
 
   await useMeditationStore.getState().generate('I feel anxious');
@@ -528,6 +544,8 @@ it('sets scriptStatus to error when Gemini call fails', async () => {
 ### 9.13 Audio Store — Signed URL Expiration Guard
 
 Supabase Storage signed URLs expire after 1 hour. A user who pauses a session and returns after the URL has expired will receive a silent network error from `expo-audio`. The `audioStore` must guard against this on every play attempt.
+
+**Player ownership:** the `audioStore` creates its player with `createAudioPlayer(source)` (imperative, safe outside React) and swaps sources with `player.replace(newSource)`. It must expose an `unload()` action that calls `player.remove()`; the playback screen calls `unload()` from its `useEffect` cleanup (FR-NAV-03). For live position/duration UI, the screen passes the store's player to the `useAudioPlayerStatus(player)` hook — do not poll or mirror position into the store. Never use the `useAudioPlayer` hook for the store's player: hook-created players are auto-released on component unmount, which would leave the store holding a dead player.
 
 **Required state fields:**
 
@@ -564,32 +582,50 @@ play: async () => {
 
 **Rules:**
 - `urlGeneratedAt` must be set (to `Date.now()`) whenever `audioUrl` is written to the store — both on initial load and after a refresh.
-- `refreshAudioUrl(sessionId)` is a `supabaseRepository` call that generates a new signed URL for the existing Storage object; it does not re-invoke ElevenLabs.
+- `refreshAudioUrl(sessionId)` is a `supabaseRepository` call that reads the session's `audio_path` and calls `supabase.storage.from(bucket).createSignedUrl(audio_path, ...)` for the existing Storage object; it does not re-invoke ElevenLabs. It relies on the per-user `storage.objects` RLS policy described in §8.2.
 - The 45-minute threshold provides a 15-minute buffer against the 1-hour signed URL expiry.
 
 ---
 
-## 10. Data Model (Supabase)
+## 10. Data Model (Supabase / Postgres)
 
-```
-users/{userId}
-  ├── displayName: string
-  ├── email: string
-  └── createdAt: timestamp
+Supabase is Postgres — the model is relational tables with RLS, not nested document paths. `auth.users` is managed by Supabase Auth; do not duplicate email/password there.
 
-(Post-prototype)
-users/{userId}/sessions/{sessionId}
-  ├── prompt: string
-  ├── script: string
-  ├── audioUrl: string
-  ├── durationSeconds: number
-  └── createdAt: timestamp
+> **Note:** the `sessions` table is **required for the prototype**, not post-prototype — both Edge Functions depend on it (`/generate-script` writes the script, `/synthesize-audio` reads it back and records the audio path; see §8.1).
+
+```sql
+-- Prototype
+create table profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text,
+  created_at timestamptz not null default now()
+);
+
+create table sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  prompt text not null,
+  script text not null,
+  audio_path text,              -- Storage object path ({userId}/{sessionId}.mp3), NOT a signed URL
+  duration_seconds int,
+  created_at timestamptz not null default now()
+);
+
+create table usage_counters (   -- rate limiting, SEC-03
+  user_id uuid not null references auth.users(id) on delete cascade,
+  window_start timestamptz not null,
+  request_count int not null default 0,
+  primary key (user_id, window_start)
+);
 ```
+
+**RLS:** enabled on every table. `profiles` and `sessions` policies restrict all operations to `auth.uid() = id` / `auth.uid() = user_id`. `usage_counters` is written only by the Edge Functions (service-role client bypasses RLS); no client-facing policies are created for it.
 
 ---
 
 ## 11. Out of Scope for Prototype
 
+- Google Sign-In (email/password only; Google auth requires additional native OAuth configuration)
 - Background ambient music
 - Voice selection by the user
 - Offline playback / cached audio

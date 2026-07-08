@@ -66,12 +66,12 @@ This document breaks the prototype build into sequential phases. Each phase has 
    - Copy URL and publishable key into `.env`
    - Initialize the Supabase CLI locally: `npx supabase init`
 
-7. **Configure Development Build**
-   - Verify `expo-audio` is not compatible with Expo GO
-   - Document build commands: `npx expo run:ios` / `npx expo run:android`
+7. **Configure the testing workflow**
+   - Daily development happens in **Expo Go**: `npx expo start`, scan the QR code on the phone — the entire prototype stack (including `expo-audio`) is included in Expo Go on SDK 56
+   - Document dev-build commands for later (post-prototype native modules or store builds): `npx expo run:android` locally; EAS Build for iOS (`npx expo run:ios` requires a Mac and is unavailable on this Windows machine)
 
 ### Exit Criteria
-- `npx expo run:ios` builds and shows a blank screen without errors
+- The app boots in Expo Go on a phone (blank screen, no errors)
 - All directories and placeholder files exist
 
 ---
@@ -97,9 +97,9 @@ This document breaks the prototype build into sequential phases. Each phase has 
      id uuid primary key default gen_random_uuid(),
      user_id uuid references auth.users(id) not null,
      prompt text not null,
-     script text,
-     audio_url text,
-     duration_minutes int,
+     script text not null,
+     audio_path text,          -- Storage object path ({userId}/{sessionId}.mp3), NOT a signed URL (spec §10)
+     duration_seconds int,
      created_at timestamptz default now()
    );
    ```
@@ -107,11 +107,14 @@ This document breaks the prototype build into sequential phases. Each phase has 
 3. **Create `usage_counters` table** (for SEC-03 rate limiting)
    ```sql
    create table usage_counters (
-     user_id uuid references auth.users(id) primary key,
-     request_count int default 0,
-     window_start timestamptz default now()
+     user_id uuid references auth.users(id) not null,
+     window_start timestamptz not null,
+     request_count int not null default 0,
+     primary key (user_id, window_start)
    );
    ```
+   Updates must be atomic — a single `insert ... on conflict ... do update ... returning`
+   (or a Postgres RPC), never read-then-write from the Edge Function (spec §8.2).
 
 4. **Enable and write RLS policies**
    - `profiles`: users can only select/update their own row
@@ -123,6 +126,9 @@ This document breaks the prototype build into sequential phases. Each phase has 
 6. **Write SQL as a Supabase migration file** under `supabase/migrations/` so the schema is version-controlled
 
 7. **Set up Supabase Storage bucket** named `meditation-audio` with private access (signed URLs only)
+   - Add a `storage.objects` RLS policy allowing authenticated users to `select` only objects under their own `{userId}/` prefix — required for the client-side `refreshAudioUrl` / `createSignedUrl` call (spec §8.2, §9.13)
+
+8. **Disable "Confirm email"** in the Supabase Auth dashboard for the prototype — otherwise new sign-ups cannot log in until they click the verification link (spec §5.2)
 
 ### Exit Criteria
 - All three tables exist in the Supabase dashboard
@@ -139,6 +145,8 @@ This document breaks the prototype build into sequential phases. Each phase has 
 
 **`src/lib/supabaseClient.ts`**
 - Instantiate the Supabase client once using `createClient()` with `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- Configure auth for React Native: `{ auth: { storage: AsyncStorage, autoRefreshToken: true, persistSession: true, detectSessionInUrl: false } }` — without `storage: AsyncStorage`, FR-AUTH-03 (session persistence) fails
+- Wire `AppState` to call `supabase.auth.startAutoRefresh()` on foreground / `stopAutoRefresh()` on background (spec §9.9)
 - Export as a named singleton — this is the only place `createClient()` is ever called
 
 **`src/stores/authStore.ts`**
@@ -164,11 +172,12 @@ interface AuthStore {
 - Subscribe to `supabase.auth.onAuthStateChange` in a `useEffect`
 - On each change, call `authStore.setSession(session)`
 - Unsubscribe in the cleanup function
-- Renders `<Stack />` (Expo Router's root navigator)
+- Call `setAudioModeAsync({ playsInSilentMode: true })` once on mount — without it, iOS mutes all playback when the hardware silent switch is on (FR-TTS-04)
+- Renders the root `<Stack>` with **`Stack.Protected` guards** (spec FR-NAV-01): `<Stack.Protected guard={!!session}>` wrapping the `(app)` group screen and `<Stack.Protected guard={!session}>` wrapping the `(auth)` group screen, with the guard condition read from `authStore`. This is the only place auth gating lives — no `router.replace` in `useEffect` anywhere.
 
 **`app/(auth)/_layout.tsx`**
 - Simple stack layout, no tab bar
-- If user is already authenticated, redirect to `/(app)/`
+- No auth redirect logic — the root layout's `Stack.Protected` guard already routes authenticated users to `(app)`
 
 **`app/(auth)/login.tsx`**
 - Email + password inputs
@@ -183,10 +192,9 @@ interface AuthStore {
 - "Create Account" button → calls `signUp()`
 - On success, navigates to `/(app)/`
 
-**`app/(app)/_layout.tsx`** — Protected layout
-- Reads `authStore.status` with a selector
-- If `status === 'unauthenticated'`, calls `router.replace('/login')`
-- Individual screens do NOT implement their own auth redirect
+**`app/(app)/_layout.tsx`** — App group layout
+- Stack/tab layout for the app screens only
+- No auth redirect logic here — access is already gated by `Stack.Protected` in the root layout; individual screens do NOT implement their own auth redirect either
 
 ### Exit Criteria
 - New user can create an account and land on the `(app)` group
@@ -249,15 +257,17 @@ interface AudioStore {
   pause: () => void;
   stop: () => void;
   seekTo: (positionMs: number) => void;
+  unload: () => void;
 }
 ```
-- `play()` implements the signed URL expiration guard from spec section 9.13
-- The 45-minute threshold check runs before every play attempt
-- `load()` sets `urlGeneratedAt = Date.now()`
+- The store owns a player created with `createAudioPlayer()` (the imperative expo-audio API — never the `useAudioPlayer` hook, which is auto-released on component unmount; spec §9.13)
+- `load()` calls `player.replace(source)` and sets `urlGeneratedAt = Date.now()`
+- `play()` implements the signed URL expiration guard from spec section 9.13; the 45-minute threshold check runs before every play attempt
+- `unload()` calls `player.remove()` — invoked from the playback screen's `useEffect` cleanup (FR-NAV-03)
 
 **`src/hooks/useMeditation.ts`** and **`src/hooks/useAudio.ts`**
 - Selector hooks for each store
-- `useAudio.ts` also manages the `expo-audio` `useAudioPlayer` instance lifecycle
+- `useAudio.ts` exposes the store's player so screens can pass it to `useAudioPlayerStatus(player)` for live position/duration — position is not mirrored into the store
 
 ### Tests to Write (per spec section 9.11)
 - `meditationStore`: happy path, Gemini failure, ElevenLabs failure
@@ -286,9 +296,9 @@ Security checks in order (per spec section 8.2):
 4. **SEC-04** — Call Gemini API using `GEMINI_API_KEY` from `Deno.env`
 
 Implementation details:
-- Use `npm:@google/generative-ai` with Deno `npm:` specifier
-- Model: `gemini-2.5-flash`
-- Pass system prompt via `systemInstruction` (not in `contents`)
+- Use `npm:@google/genai` with Deno `npm:` specifier — NOT the deprecated `@google/generative-ai` (spec §8.3)
+- Model: `gemini-2.5-flash` — verify the current recommended flash model against https://ai.google.dev/gemini-api/docs before hardcoding
+- Pass system prompt via `config.systemInstruction` (not in `contents`); read the result from `response.text` (property, not method)
 - System prompt: calm meditation guide, plain prose, no markdown, no preamble
 - Save script to `sessions` table with `user_id` and `prompt`
 - Return `{ sessionId: string, script: string }`
@@ -300,8 +310,8 @@ Implementation details:
 3. Call ElevenLabs API using `ELEVENLABS_API_KEY` from `Deno.env`
 4. Upload MP3 bytes to Supabase Storage bucket `meditation-audio` at path `{userId}/{sessionId}.mp3`
 5. Generate a signed URL with 1-hour expiry
-6. Update `sessions` row with `audio_url`
-7. Return `{ audioUrl: string }`
+6. Update `sessions` row with `audio_path` (the Storage object path — never the signed URL, which expires in 1 hour)
+7. Return `{ audioUrl: string }` (the signed URL goes to the client only)
 
 **Secrets to configure:**
 ```
@@ -357,7 +367,7 @@ supabase functions deploy synthesize-audio
 - Audio controls (Play, Pause, Replay, Stop) connected to `audioStore`
 - Progress bar: `positionMs / durationMs`
 - While `audioStatus === 'loading'`: skeleton or spinner over the controls
-- `useEffect` cleanup: calls `audioStore.stop()` on unmount (FR-NAV-03)
+- `useEffect` cleanup: calls `audioStore.unload()` on unmount, which stops playback and releases the player via `player.remove()` (FR-NAV-03)
 - `useEffect` triggers `audioStore.load(audioUrl)` when `audioStatus === 'success'`
 
 **`app/(app)/settings.tsx`** — Settings Screen
@@ -442,6 +452,9 @@ supabase functions deploy synthesize-audio
 | Expired JWT | `401` from Edge Function, user redirected to login |
 | Pause audio for 46+ minutes, tap Play | New signed URL fetched, audio resumes |
 
+### Setup Note
+Install the `jest-expo` preset (`npx expo install jest-expo -- --save-dev`) and set `"preset": "jest-expo"` in the Jest config — bare Jest cannot transform React Native / Expo modules (spec §9.2).
+
 ### Exit Criteria
 - `npm test` passes all unit tests with no failures
 - Manual integration tests pass on both iOS and Android
@@ -471,8 +484,12 @@ Phases 3 and 4 can be worked in parallel since they have independent surfaces (c
 |---|---|
 | Never call Supabase `createClient()` more than once | Section 9.9 |
 | Use `npm:` specifier for all imports inside Edge Functions (Deno, not Node) | Section 8.3 |
-| Pass system prompt via `systemInstruction`, not in `contents` array | Section 8.3 |
-| Use Development Build — Expo GO will crash on `expo-audio` | Section 3 |
+| Use `@google/genai` (new SDK) — `@google/generative-ai` is deprecated with a different API | Section 8.3 |
+| Pass system prompt via `config.systemInstruction`, not in `contents` array | Section 8.3 |
+| Expo Go covers the whole prototype stack on SDK 56 — a Development Build is only needed once native modules outside Expo Go are added (e.g., Google Sign-In, post-prototype) | Section 3 |
 | 45-minute URL refresh threshold (not 60) to buffer against expiry | Section 9.13 |
 | `sessionId` is the only value passed to `/synthesize-audio` — script is fetched server-side | Section 8.1 |
-| Auth redirect lives in `app/(app)/_layout.tsx` only — not in individual screens | Section 9.9 |
+| Auth gating via `Stack.Protected` guards in root `app/_layout.tsx` only — no `router.replace` redirects, nothing in group layouts or screens | FR-NAV-01, Section 9.9 |
+| Store `audio_path` (object path) in the DB, return signed URLs to the client only | Sections 8.1, 10 |
+| `createAudioPlayer()` for the store-owned player — `useAudioPlayer` hook never lives in a store | Section 9.13 |
+| `setAudioModeAsync({ playsInSilentMode: true })` at startup or iOS silent switch mutes everything | FR-TTS-04 |
