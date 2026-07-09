@@ -119,7 +119,7 @@ This document breaks the prototype build into sequential phases. Each phase has 
 4. **Enable and write RLS policies**
    - `profiles`: users can only select/update their own row
    - `sessions`: users can only select/insert/update their own rows
-   - `usage_counters`: users can only select their own row; only the Edge Function service role can update
+   - `usage_counters`: RLS enabled with no client-facing policies — only the Edge Functions' service-role client (which bypasses RLS) reads/writes it (spec §10)
 
 5. **Create a `profiles` insert trigger** on `auth.users` so a profile row is created automatically on account creation
 
