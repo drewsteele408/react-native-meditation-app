@@ -1,2 +1,37 @@
-// Placeholder — implemented in Phase 3
-export {};
+import { supabase } from "../lib/supabaseClient";
+import type { MeditationSession } from "../types";
+
+const AUDIO_BUCKET = 'meditation-audio';
+const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour
+
+export async function getSession(sessionId: string): Promise<MeditationSession> {
+    const { data, error } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('id', sessionId)
+    .single();
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    return data as MeditationSession;
+}
+
+export async function refreshAudioUrl(sessionId: string): Promise<string> {
+    const session = await getSession(sessionId);
+
+    if (!session.audio_path) {
+        throw new Error('Session has no audio to refresh.')
+    }
+
+    const { data, error } = await supabase.storage
+    .from(AUDIO_BUCKET)
+    .createSignedUrl(session.audio_path, SIGNED_URL_TTL_SECONDS);
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    return data.signedUrl;
+}
