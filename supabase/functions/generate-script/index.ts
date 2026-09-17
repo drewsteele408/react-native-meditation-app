@@ -12,7 +12,7 @@
 // See meditation-app-spec.md §8.1-8.3 and §10 for the full request flow and
 // sessions table schema.
 
-import { GoogleGenAI } from 'npm:@google/genai';
+import { ApiError, GoogleGenAI } from 'npm:@google/genai';
 import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
 import { createAdminClient, verifyAuth } from '../_shared/auth.ts';
 
@@ -45,6 +45,19 @@ const SYSTEM_INSTRUCTION =
   'request. Use only plain prose — no bullet points, headers, or markdown ' +
   'formatting. The tone should be warm, slow, and soothing. Begin the ' +
   'script immediately without any preamble.';
+
+// Gemini occasionally returns 503 UNAVAILABLE ("high demand ... temporary")
+// or 429 (its own upstream rate limit, distinct from our SEC-03 counter) —
+// both are explicitly transient per Google's own error message, so a couple
+// of short retries clears most of them instead of failing the whole request
+// on a blip. Anything else (bad request, auth, etc.) fails immediately.
+const RETRYABLE_STATUS_CODES = new Set([429, 503]);
+const MAX_GEMINI_ATTEMPTS = 3;
+const RETRY_DELAY_MS = [300, 900];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface GenerateScriptRequestBody {
   prompt?: unknown;
@@ -132,35 +145,55 @@ Deno.serve(async (req: Request) => {
       return errorResponse(500, 'Unable to process request');
     }
 
-    let script: string;
-    try {
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: prompt,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          // gemini-3.8-flash has "thinking" on by default (medium level) and
-          // it draws from the same output token budget as the final text —
-          // on some prompts it exhausts the budget reasoning and leaves an
-          // empty response.text (intermittent 502s in testing). A meditation
-          // script needs no chain-of-thought, so disable it outright.
-          // thinkingBudget: 0 = disabled (per @google/genai's ThinkingConfig
-          // type comment; confirmed against the installed SDK's .d.ts).
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      });
+    const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+    let script: string | undefined;
+    let lastError: unknown;
 
-      // response.text is a property on the current @google/genai SDK, not
-      // a method — do not call it as response.text().
-      const text = response.text;
-      if (!text || typeof text !== 'string' || text.trim().length === 0) {
-        console.error('Gemini returned an empty response');
-        return errorResponse(502, 'Meditation script generation failed');
+    for (let attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: prompt,
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+            // gemini-3.8-flash has "thinking" on by default (medium level) and
+            // it draws from the same output token budget as the final text —
+            // on some prompts it exhausts the budget reasoning and leaves an
+            // empty response.text (intermittent 502s in testing). A meditation
+            // script needs no chain-of-thought, so disable it outright.
+            // thinkingBudget: 0 = disabled (per @google/genai's ThinkingConfig
+            // type comment; confirmed against the installed SDK's .d.ts).
+            thinkingConfig: { thinkingBudget: 0 },
+          },
+        });
+
+        // response.text is a property on the current @google/genai SDK, not
+        // a method — do not call it as response.text().
+        const text = response.text;
+        if (!text || typeof text !== 'string' || text.trim().length === 0) {
+          console.error(`Gemini returned an empty response (attempt ${attempt})`);
+          lastError = new Error('Empty response');
+          continue;
+        }
+        script = text;
+        break;
+      } catch (err) {
+        lastError = err;
+        const status = err instanceof ApiError ? err.status : undefined;
+        console.error(
+          `Gemini API call failed (attempt ${attempt}/${MAX_GEMINI_ATTEMPTS}, status ${status}):`,
+          err instanceof Error ? err.message : err,
+        );
+        if (status === undefined || !RETRYABLE_STATUS_CODES.has(status)) break;
       }
-      script = text;
-    } catch (err) {
-      console.error('Gemini API call failed:', err instanceof Error ? err.message : err);
+
+      if (attempt < MAX_GEMINI_ATTEMPTS) {
+        await sleep(RETRY_DELAY_MS[attempt - 1]);
+      }
+    }
+
+    if (script === undefined) {
+      console.error('Gemini generation failed after all attempts:', lastError);
       return errorResponse(502, 'Meditation script generation failed');
     }
 
