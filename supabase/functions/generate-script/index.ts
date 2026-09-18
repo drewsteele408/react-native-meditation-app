@@ -27,7 +27,7 @@ const MAX_PROMPT_LENGTH = 1000;
 // conservative prototype default since each request burns paid Gemini +
 // (on the follow-up call) ElevenLabs quota. Adjust this single constant if
 // product wants a different cap — there is no separate config table.
-const MAX_REQUESTS_PER_HOUR = 10;
+const MAX_REQUESTS_PER_HOUR = 30;
 
 // Model verified against https://ai.google.dev/gemini-api/docs/models and
 // https://ai.google.dev/gemini-api/docs/pricing on 2026-09-16 (three
@@ -36,15 +36,39 @@ const MAX_REQUESTS_PER_HOUR = 10;
 // gemini-3.8-flash is the current stable, recommended flash-tier model.
 // Re-verify against the docs before relying on this if it has been a while
 // since this file was last touched — flash-tier naming has moved fast.
-const GEMINI_MODEL = 'gemini-3.8-flash';
+const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
+// ElevenLabs (synthesize-audio/index.ts) bills per character of spoken
+// text, but only bills <break> tags for their own literal characters, not
+// for the silence they produce. Meditation scripts are naturally
+// pause-heavy (breathing cues, silent holds between thoughts), so we ask
+// Gemini to express that silence as <break> tags instead of padding it out
+// with extra spoken prose — same felt pacing, fewer billed characters.
+// Verified against https://elevenlabs.io/docs/models and
+// https://elevenlabs.io/docs/help-center/product/core-capabilities/text-to-speech/how-can-i-add-pauses
+// on 2026-09-18: a single <break time="Xs" /> tag is only reliable up to
+// ~3s, and ElevenLabs' own guidance warns that stacking many consecutive
+// break tags in one generation can destabilize output (speech speeding up,
+// noise/artifacts) — so breaks must read as natural pauses between
+// phrases/sentences, never as a bulk mechanism for minutes of dead air.
+// eleven_flash_v2_5 (the model synthesize-audio now defaults to) supports
+// break tags with no extra request-body flag needed. Re-verify this
+// guidance against current ElevenLabs docs if it's been a while.
 const SYSTEM_INSTRUCTION =
   'You are a professional meditation guide. The user will describe how they ' +
   'are feeling or what they want from their meditation session. Write a ' +
   'calming, first-person guided meditation script tailored to their ' +
   'request. Use only plain prose — no bullet points, headers, or markdown ' +
   'formatting. The tone should be warm, slow, and soothing. Begin the ' +
-  'script immediately without any preamble.';
+  'script immediately without any preamble. Keep the spoken wording itself ' +
+  'natural and unpadded — do not add extra sentences just to fill time. ' +
+  'Instead, insert SSML pause tags of the form <break time="Xs" /> (X ' +
+  'between 1 and 3, never exceeding 3 seconds per tag) at natural pause ' +
+  'points: after breathing instructions, between distinct thoughts or ' +
+  'sentences, and at moments meant to be reflective silence. Use single, ' +
+  'isolated break tags separated by spoken text — never place multiple ' +
+  'break tags back-to-back — so the pacing sounds like natural breathing ' +
+  'room rather than dead air.';
 
 // Gemini occasionally returns 503 UNAVAILABLE ("high demand ... temporary")
 // or 429 (its own upstream rate limit, distinct from our SEC-03 counter) —
@@ -108,6 +132,16 @@ Deno.serve(async (req: Request) => {
     // durationMinutes is optional and client-supplied (src/repositories/
     // geminiRepository.ts always sends it); validate loosely and store it
     // as duration_seconds on the session row when present and sane.
+    //
+    // Cap at 20 minutes: the product spec (meditation-app-spec.md line 79)
+    // only ever intends 5/10/15-minute presets plus a custom value, so 20 is
+    // the longest preset (15) plus a 5-minute buffer for custom input — not
+    // an arbitrary ceiling. A longer duration is both a cost outlier (a much
+    // larger Gemini script billed further at ~1 ElevenLabs credit/char even
+    // after the flash_v2_5 discount) and a correctness risk: the spec notes
+    // (meditation-app-spec.md line 180) that a long sequential Gemini +
+    // ElevenLabs call risks hitting Supabase's 150-second Edge Function
+    // timeout.
     let durationSeconds: number | undefined;
     if (body.durationMinutes !== undefined) {
       const durationMinutes = body.durationMinutes;
@@ -115,7 +149,7 @@ Deno.serve(async (req: Request) => {
         typeof durationMinutes !== 'number' ||
         !Number.isFinite(durationMinutes) ||
         durationMinutes <= 0 ||
-        durationMinutes > 60
+        durationMinutes > 20
       ) {
         return errorResponse(400, 'Invalid durationMinutes');
       }

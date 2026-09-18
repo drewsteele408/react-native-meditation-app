@@ -23,10 +23,19 @@ const STORAGE_BUCKET = 'meditation-audio';
 const SIGNED_URL_EXPIRY_SECONDS = 60 * 60; // 1 hour, per spec §8.1 / §8.2
 
 // Not pinned by the spec (§8.4 only specifies voice characteristics, not an
-// ElevenLabs model id). eleven_multilingual_v2 is ElevenLabs' current
-// general-purpose stable TTS model as of implementation time; overridable
-// via env without a code change if that changes.
-const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
+// ElevenLabs model id). Verified against https://elevenlabs.io/docs/models
+// on 2026-09-18: eleven_flash_v2_5 is ElevenLabs' current recommended
+// lower-cost model, billing ~50% less per character than the standard
+// models (incl. eleven_multilingual_v2) for API generations — a real cost
+// concern here since generation is billed per character of session.script.
+// It also supports the same <break time="Xs" /> SSML pause tags used in
+// SYSTEM_INSTRUCTION (generate-script/index.ts) — confirmed multilingual_v2,
+// flash_v2, and flash_v2.5 all support break tags (eleven_v3 does not), and
+// no request-body flag beyond `text` + `model_id` is needed to enable SSML
+// parsing. Re-verify against the docs before relying on this if it's been a
+// while — ElevenLabs' model lineup and pricing move fast. Overridable via
+// env without a code change if that changes.
+const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';
 
 interface SynthesizeAudioRequestBody {
   sessionId?: unknown;
