@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Platform,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
   useWindowDimensions,
 } from 'react-native';
 import { router } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import {
   useAudioGenerationStatus,
   useGenerate,
@@ -19,6 +22,7 @@ import {
   useSetPrompt,
 } from '../../src/hooks/useMeditation';
 import { useNetworkStatus } from '../../src/hooks/useNetworkStatus';
+import { colors, radius } from '../../src/theme/colors';
 
 const MAX_PROMPT_LENGTH = 1000; // mirrors SEC-02
 const DURATION_OPTIONS = [5, 10, 15] as const;
@@ -64,8 +68,9 @@ export default function PromptScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={[styles.form, { width: formWidth }]}>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <LinearGradient colors={[colors.backgroundGlow, colors.background]} style={styles.container}>
+        <View style={[styles.form, { width: formWidth }]}>
         <Text style={styles.title}>What&apos;s on your mind?</Text>
 
         <TextInput
@@ -73,7 +78,7 @@ export default function PromptScreen() {
           value={prompt}
           onChangeText={setPrompt}
           placeholder="I'm feeling anxious and want to calm down…"
-          placeholderTextColor="#9ca3af"
+          placeholderTextColor={colors.placeholder}
           multiline
           maxLength={MAX_PROMPT_LENGTH}
           textAlignVertical="top"
@@ -151,10 +156,21 @@ export default function PromptScreen() {
         >
           <Text style={styles.generateButtonText}>Generate</Text>
         </TouchableOpacity>
-      </View>
-    </View>
+        </View>
+      </LinearGradient>
+    </TouchableWithoutFeedback>
   );
 }
+
+// NFR-03: iOS and Android render elevated/glowing surfaces differently —
+// shadow props on iOS, `elevation` on Android.
+const platformGlow = {
+  shadowColor: colors.primary,
+  shadowOpacity: 0.4,
+  shadowRadius: 12,
+  shadowOffset: { width: 0, height: 4 },
+  elevation: 6,
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -171,30 +187,33 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 16,
     textAlign: 'center',
+    color: colors.textPrimary,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 16,
     minHeight: 140,
+    color: colors.textPrimary,
   },
   charCount: {
     alignSelf: 'flex-end',
     fontSize: 12,
-    color: '#6b7280',
+    color: colors.textMuted,
     marginTop: 4,
     marginBottom: 16,
   },
   charCountWarning: {
-    color: '#dc2626',
+    color: colors.error,
     fontWeight: '600',
   },
   label: {
     fontSize: 13,
-    color: '#6b7280',
+    color: colors.textMuted,
     marginBottom: 8,
   },
   durationRow: {
@@ -205,25 +224,26 @@ const styles = StyleSheet.create({
   durationButton: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
     paddingVertical: 10,
     alignItems: 'center',
   },
   durationButtonSelected: {
-    backgroundColor: '#4b5563',
-    borderColor: '#4b5563',
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   durationButtonText: {
     fontSize: 15,
-    color: '#111827',
+    color: colors.textPrimary,
   },
   durationButtonTextSelected: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontWeight: '600',
   },
   offlineText: {
-    color: '#dc2626',
+    color: colors.error,
     marginBottom: 12,
     fontWeight: '600',
   },
@@ -235,24 +255,27 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 14,
-    color: '#374151',
+    color: colors.textSecondary,
   },
   errorText: {
-    color: '#dc2626',
+    color: colors.error,
     marginBottom: 12,
   },
   generateButton: {
-    backgroundColor: '#4b5563',
-    borderRadius: 8,
-    paddingVertical: 14,
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingVertical: 18,
     alignItems: 'center',
     marginTop: 4,
+    ...platformGlow,
   },
   generateButtonDisabled: {
-    backgroundColor: '#9ca3af',
+    backgroundColor: colors.disabled,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   generateButtonText: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontSize: 16,
     fontWeight: '600',
   },

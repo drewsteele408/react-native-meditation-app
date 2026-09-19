@@ -5,9 +5,10 @@ export interface MeditationSession {
     user_id: string;
     prompt: string;
     script: string;
-    audio_path: string | null; 
-    duration_seconds: number | null; 
+    audio_path: string | null;
+    duration_seconds: number | null;
     created_at: string;
+    is_favorite: boolean;
 }
 
 export class GeminiError extends Error {

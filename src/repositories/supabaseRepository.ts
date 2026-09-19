@@ -35,3 +35,28 @@ export async function refreshAudioUrl(sessionId: string): Promise<string> {
 
     return data.signedUrl;
 }
+
+export async function setFavorite(sessionId: string, isFavorite: boolean): Promise<void> {
+    const { error } = await supabase
+    .from('sessions')
+    .update({ is_favorite: isFavorite })
+    .eq('id', sessionId);
+
+    if (error) {
+        throw new Error(error.message);
+    }
+}
+
+export async function listFavoriteSessions(): Promise<MeditationSession[]> {
+    const { data, error } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('is_favorite', true)
+    .order('created_at', { ascending: false });
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    return data as MeditationSession[];
+}

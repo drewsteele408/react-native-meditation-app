@@ -10,15 +10,20 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useAudioPlayerStatus } from 'expo-audio';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   useAudioGenerationStatus,
+  useFavoriteStatus,
+  useIsFavorite,
+  useLoadSession,
   useMeditationAudioUrl,
   useMeditationError,
   useResetMeditation,
   useScript,
+  useToggleFavorite,
 } from '../../src/hooks/useMeditation';
 import {
   useAudioError,
@@ -32,6 +37,7 @@ import {
   useStop,
   useUnloadAudio,
 } from '../../src/hooks/useAudio';
+import { colors } from '../../src/theme/colors';
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
@@ -41,11 +47,16 @@ function formatTime(seconds: number): string {
 }
 
 export default function PlaybackScreen() {
+  const { sessionId } = useLocalSearchParams<{ sessionId?: string }>();
   const script = useScript();
   const meditationAudioUrl = useMeditationAudioUrl();
   const audioGenStatus = useAudioGenerationStatus();
   const meditationError = useMeditationError();
   const resetMeditation = useResetMeditation();
+  const isFavorite = useIsFavorite();
+  const favoriteStatus = useFavoriteStatus();
+  const loadSession = useLoadSession();
+  const toggleFavorite = useToggleFavorite();
 
   const player = usePlayer();
   const playerStatus = useAudioPlayerStatus(player);
@@ -64,6 +75,15 @@ export default function PlaybackScreen() {
   // NFR-03: cap script/control width on wide viewports instead of
   // stretching edge-to-edge.
   const contentWidth = Math.min(width * 0.92, 560);
+
+  // Opening Playback directly for a previously-generated session (e.g. from
+  // the Library screen) — sessionId is only present on that entry path.
+  // The generate-then-navigate flow has no sessionId param and is untouched.
+  useEffect(() => {
+    if (typeof sessionId === 'string' && sessionId) {
+      loadSession(sessionId);
+    }
+  }, [sessionId, loadSession]);
 
   // meditationStore.audioUrl (populated by generate() once ElevenLabs
   // synthesis succeeds) is what audioStore.load() needs — audioStore's own
@@ -207,7 +227,10 @@ export default function PlaybackScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <LinearGradient
+      colors={[colors.backgroundGlow, colors.background]}
+      style={styles.container}
+    >
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity
           onPress={handleBack}
@@ -217,6 +240,18 @@ export default function PlaybackScreen() {
         >
           <Text style={styles.backButtonText}>‹ Back</Text>
         </TouchableOpacity>
+
+        {audioGenStatus === 'success' ? (
+          <TouchableOpacity
+            onPress={toggleFavorite}
+            disabled={favoriteStatus === 'loading'}
+            accessibilityRole="button"
+            accessibilityLabel={isFavorite ? 'Unsave meditation' : 'Save meditation'}
+            style={styles.favoriteButton}
+          >
+            <Text style={styles.favoriteButtonText}>{isFavorite ? '♥' : '♡'}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <ScrollView
@@ -229,21 +264,22 @@ export default function PlaybackScreen() {
       </ScrollView>
 
       <View style={[styles.controlsContainer, { width: contentWidth }]}>{renderControls()}</View>
-    </View>
+    </LinearGradient>
   );
 }
 
-// NFR-03: iOS and Android render elevated surfaces differently — shadow
-// props on iOS, `elevation` on Android.
+// NFR-03: iOS and Android render elevated/glowing surfaces differently —
+// shadow props on iOS, `elevation` on Android. Tinted with colors.primary
+// for the play button's soft violet glow.
 const platformElevation = Platform.select({
   ios: {
-    shadowColor: '#000',
+    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
   },
   android: {
-    elevation: 4,
+    elevation: 6,
   },
   default: {},
 });
@@ -251,10 +287,11 @@ const platformElevation = Platform.select({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fafaf9',
   },
   header: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 20,
   },
   backButton: {
@@ -262,7 +299,14 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     fontSize: 16,
-    color: '#2563eb',
+    color: colors.accentLight,
+  },
+  favoriteButton: {
+    padding: 8,
+  },
+  favoriteButtonText: {
+    fontSize: 22,
+    color: colors.favorite,
   },
   scriptScroll: {
     flex: 1,
@@ -275,7 +319,7 @@ const styles = StyleSheet.create({
   scriptText: {
     fontSize: 17,
     lineHeight: 26,
-    color: '#111827',
+    color: colors.textPrimary,
   },
   controlsContainer: {
     alignSelf: 'center',
@@ -290,21 +334,21 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 14,
-    color: '#374151',
+    color: colors.textSecondary,
   },
   errorText: {
-    color: '#dc2626',
+    color: colors.error,
     textAlign: 'center',
   },
   progressBarTrack: {
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#e5e7eb',
+    backgroundColor: colors.surfaceAlt,
     overflow: 'hidden',
   },
   progressBarFill: {
     height: 6,
-    backgroundColor: '#4b5563',
+    backgroundColor: colors.primary,
   },
   timeRow: {
     flexDirection: 'row',
@@ -314,7 +358,7 @@ const styles = StyleSheet.create({
   },
   timeText: {
     fontSize: 12,
-    color: '#6b7280',
+    color: colors.textMuted,
   },
   controlsRow: {
     flexDirection: 'row',
@@ -326,21 +370,22 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: '#e5e7eb',
+    backgroundColor: colors.surfaceAlt,
     alignItems: 'center',
     justifyContent: 'center',
   },
   controlButtonText: {
     fontSize: 20,
+    color: colors.textPrimary,
   },
   playButton: {
     width: 68,
     height: 68,
     borderRadius: 34,
-    backgroundColor: '#4b5563',
+    backgroundColor: colors.primary,
   },
   playButtonText: {
     fontSize: 26,
-    color: '#fff',
+    color: colors.onPrimary,
   },
 });

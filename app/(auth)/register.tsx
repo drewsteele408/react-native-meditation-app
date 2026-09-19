@@ -1,17 +1,21 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Platform,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
   useWindowDimensions,
 } from 'react-native';
 import { Link, router } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAuthError, useAuthStatus, useSignUp } from '../../src/hooks/useAuth';
 import { useAuthStore } from '../../src/stores/authStore';
+import { colors, radius } from '../../src/theme/colors';
 
 const MIN_PASSWORD_LENGTH = 8; // FR-AUTH-05
 
@@ -58,8 +62,9 @@ export default function RegisterScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={[styles.form, { width: formWidth }]}>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <LinearGradient colors={[colors.backgroundGlow, colors.background]} style={styles.container}>
+        <View style={[styles.form, { width: formWidth }]}>
         <Text style={styles.title}>Create Account</Text>
 
         <TextInput
@@ -67,6 +72,7 @@ export default function RegisterScreen() {
           value={displayName}
           onChangeText={setDisplayName}
           placeholder="Display name"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="words"
           accessibilityLabel="Display name"
         />
@@ -76,6 +82,7 @@ export default function RegisterScreen() {
           value={email}
           onChangeText={setEmail}
           placeholder="Email"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="none"
           autoComplete="email"
           keyboardType="email-address"
@@ -90,6 +97,7 @@ export default function RegisterScreen() {
             if (validationError) setValidationError(null);
           }}
           placeholder="Password"
+          placeholderTextColor={colors.placeholder}
           secureTextEntry
           autoCapitalize="none"
           autoComplete="password-new"
@@ -113,10 +121,11 @@ export default function RegisterScreen() {
           <ActivityIndicator
             style={styles.spinner}
             accessibilityLabel="Creating account"
+            color={colors.primary}
           />
         ) : (
           <TouchableOpacity
-            style={styles.button}
+            style={[styles.button, platformGlow]}
             onPress={handleCreateAccount}
             accessibilityRole="button"
             accessibilityLabel="Create account"
@@ -133,10 +142,21 @@ export default function RegisterScreen() {
         >
           <Text style={styles.linkText}>Already have an account? Log in</Text>
         </Link>
-      </View>
-    </View>
+        </View>
+      </LinearGradient>
+    </TouchableWithoutFeedback>
   );
 }
+
+// NFR-03: iOS and Android render elevated/glowing surfaces differently —
+// shadow props on iOS, `elevation` on Android.
+const platformGlow = {
+  shadowColor: colors.primary,
+  shadowOpacity: 0.4,
+  shadowRadius: 12,
+  shadowOffset: { width: 0, height: 4 },
+  elevation: 6,
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -153,25 +173,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 24,
     textAlign: 'center',
+    color: colors.textPrimary,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 12,
     fontSize: 16,
+    color: colors.textPrimary,
   },
   button: {
-    backgroundColor: '#4b5563',
-    borderRadius: 8,
-    paddingVertical: 12,
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingVertical: 16,
     alignItems: 'center',
     marginTop: 8,
+    ...platformGlow,
   },
   buttonText: {
-    color: '#fff',
+    color: colors.onPrimary,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -179,7 +203,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   errorText: {
-    color: '#dc2626',
+    color: colors.error,
     marginBottom: 12,
   },
   link: {
@@ -187,7 +211,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   linkText: {
-    color: '#2563eb',
+    color: colors.accentLight,
     textAlign: 'center',
   },
 });
