@@ -1,6 +1,6 @@
 // supabase/functions/synthesize-audio/index.ts
 //
-// POST { sessionId: string }
+// POST { sessionId: string, voiceId?: string }
 // -> { audioUrl: string }   (a 1-hour signed Supabase Storage URL)
 //
 // Security checks run in this exact order (spec §8.2 / §8.1 / build-plan.md
@@ -8,6 +8,8 @@
 //   SEC-01  Verify Supabase JWT                                -> 401
 //   SEC-05  Fetch session by sessionId, verify ownership        -> 403 on
 //           mismatch, 400 if the session doesn't exist
+//           Resolve voiceId (if any) against public.voices      -> 400 if
+//           unknown/inactive — never trust a client-supplied ElevenLabs id
 //           Call ElevenLabs, upload to Storage                  -> 502 on
 //           upstream failure
 //
@@ -15,6 +17,15 @@
 // This is what prevents a caller from synthesizing arbitrary text (and
 // burning another user's rate-limited quota) or reading someone else's
 // generated script by guessing an id.
+//
+// voiceId (optional, request body) is OUR internal public.voices.id uuid —
+// never a raw ElevenLabs voice id. The client must never be able to hand us
+// a raw ElevenLabs voice id directly: that would let anyone point our
+// ElevenLabs API key at arbitrary (and potentially expensive) voices on our
+// account. We always resolve it through public.voices server-side and
+// require is_active = true. If voiceId is omitted, we fall back to the
+// ELEVENLABS_VOICE_ID env var for backwards compatibility during rollout
+// (pre-existing clients that don't send voiceId yet).
 
 import { corsHeaders, errorResponse, jsonResponse } from '../_shared/cors.ts';
 import { createAdminClient, verifyAuth } from '../_shared/auth.ts';
@@ -39,12 +50,18 @@ const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_flash_v2_5';
 
 interface SynthesizeAudioRequestBody {
   sessionId?: unknown;
+  voiceId?: unknown;
 }
 
 interface SessionRow {
   id: string;
   user_id: string;
   script: string;
+}
+
+interface VoiceRow {
+  id: string;
+  elevenlabs_voice_id: string;
 }
 
 Deno.serve(async (req: Request) => {
@@ -76,6 +93,17 @@ Deno.serve(async (req: Request) => {
       return errorResponse(400, 'Missing required field: sessionId');
     }
 
+    // voiceId is optional — omitting it means "use the default voice"
+    // (see the env-var fallback below). When present it must be a non-empty
+    // string; the actual existence/active/ownership-of-ElevenLabs-id check
+    // happens after SEC-05, via a lookup against public.voices — never
+    // trust this value as an ElevenLabs voice id directly.
+    const rawVoiceId = body.voiceId;
+    if (rawVoiceId !== undefined && (typeof rawVoiceId !== 'string' || rawVoiceId.trim().length === 0)) {
+      return errorResponse(400, 'Invalid field: voiceId');
+    }
+    const requestedVoiceId = rawVoiceId as string | undefined;
+
     // SEC-05 — fetch the session and verify ownership. Only session.script
     // (never client-supplied text) is ever passed to ElevenLabs.
     const { data: session, error: fetchError } = await supabaseAdmin
@@ -100,17 +128,58 @@ Deno.serve(async (req: Request) => {
     }
 
     const elevenLabsApiKey = Deno.env.get('ELEVENLABS_API_KEY');
-    const voiceId = Deno.env.get('ELEVENLABS_VOICE_ID');
-    if (!elevenLabsApiKey || !voiceId) {
-      console.error('ELEVENLABS_API_KEY or ELEVENLABS_VOICE_ID is not configured');
+    if (!elevenLabsApiKey) {
+      console.error('ELEVENLABS_API_KEY is not configured');
       return errorResponse(500, 'Unable to process request');
     }
+
+    // Resolve the ElevenLabs voice id to use. `resolvedVoiceRowId` (the
+    // public.voices.id, distinct from the ElevenLabs id) is only set when
+    // we resolved via the table lookup path, so the sessions.voice_id
+    // update below knows whether there's a voices row to record.
+    let elevenLabsVoiceId: string;
+    let resolvedVoiceRowId: string | null = null;
+
+    if (requestedVoiceId !== undefined) {
+      // Client asked for a specific voice — look it up server-side rather
+      // than trusting any ElevenLabs id from the request. Require
+      // is_active = true so retired/hidden voices can't still be selected.
+      const { data: voiceRow, error: voiceFetchError } = await supabaseAdmin
+        .from('voices')
+        .select('id, elevenlabs_voice_id')
+        .eq('id', requestedVoiceId)
+        .eq('is_active', true)
+        .maybeSingle<VoiceRow>();
+
+      if (voiceFetchError) {
+        console.error('Failed to fetch voice:', voiceFetchError.message);
+        return errorResponse(500, 'Unable to process request');
+      }
+      if (!voiceRow) {
+        // Do not silently fall back to the default voice — an unknown or
+        // inactive voiceId is a client error and should surface as one,
+        // not be masked by quietly substituting a different voice.
+        return errorResponse(400, 'Invalid voiceId');
+      }
+
+      elevenLabsVoiceId = voiceRow.elevenlabs_voice_id;
+      resolvedVoiceRowId = voiceRow.id;
+    } else {
+      // Backwards-compat fallback for rollout before clients send voiceId.
+      const envVoiceId = Deno.env.get('ELEVENLABS_VOICE_ID');
+      if (!envVoiceId) {
+        console.error('ELEVENLABS_VOICE_ID is not configured and no voiceId was provided');
+        return errorResponse(500, 'Unable to process request');
+      }
+      elevenLabsVoiceId = envVoiceId;
+    }
+
     const modelId = Deno.env.get('ELEVENLABS_MODEL_ID') || DEFAULT_ELEVENLABS_MODEL_ID;
 
     let audioBytes: Uint8Array;
     try {
       const elevenLabsRes = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+        `https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoiceId}`,
         {
           method: 'POST',
           headers: {
@@ -160,9 +229,16 @@ Deno.serve(async (req: Request) => {
 
     // Persist the Storage object path (never the signed URL, which expires
     // in 1 hour and would be dead on any later read) — spec §8.1/§8.2.
+    // Also record which voices row was used, but only when one was
+    // actually resolved via the table lookup (resolvedVoiceRowId) — the
+    // env-var fallback path has no corresponding public.voices.id to store.
     const { error: updateError } = await supabaseAdmin
       .from('sessions')
-      .update({ audio_path: storagePath })
+      .update(
+        resolvedVoiceRowId
+          ? { audio_path: storagePath, voice_id: resolvedVoiceRowId }
+          : { audio_path: storagePath },
+      )
       .eq('id', sessionId)
       .eq('user_id', userId);
 

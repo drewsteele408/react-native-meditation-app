@@ -9,6 +9,14 @@ export interface MeditationSession {
     duration_seconds: number | null;
     created_at: string;
     is_favorite: boolean;
+    voice_id: string | null;
+}
+
+export interface Voice {
+    id: string;
+    display_name: string;
+    description: string | null;
+    preview_audio_path: string | null;
 }
 
 export class GeminiError extends Error {

@@ -47,6 +47,31 @@ export async function setFavorite(sessionId: string, isFavorite: boolean): Promi
     }
 }
 
+export async function getPreferredVoiceId(userId: string): Promise<string | null> {
+    const { data, error } = await supabase
+    .from('profiles')
+    .select('preferred_voice_id')
+    .eq('id', userId)
+    .single();
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    return (data as { preferred_voice_id: string | null }).preferred_voice_id;
+}
+
+export async function setPreferredVoiceId(userId: string, voiceId: string): Promise<void> {
+    const { error } = await supabase
+    .from('profiles')
+    .update({ preferred_voice_id: voiceId })
+    .eq('id', userId);
+
+    if (error) {
+        throw new Error(error.message);
+    }
+}
+
 export async function listFavoriteSessions(): Promise<MeditationSession[]> {
     const { data, error } = await supabase
     .from('sessions')

@@ -1,9 +1,9 @@
 import { supabase } from '../lib/supabaseClient';
 import { ElevenLabsError } from '../types';
 
-export async function synthesizeSpeech(sessionId: string): Promise<string> { 
+export async function synthesizeSpeech(sessionId: string, voiceId?: string): Promise<string> {
     const { data, error } = await supabase.functions.invoke('synthesize-audio', {
-        body: { sessionId }, 
+        body: voiceId ? { sessionId, voiceId } : { sessionId },
     });
 
     if (error) {

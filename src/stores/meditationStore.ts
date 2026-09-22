@@ -16,7 +16,7 @@ interface MeditationStore {
   favoriteStatus: AsyncStatus;
   error: string | null;
   setPrompt: (prompt: string) => void;
-  generate: (prompt: string, durationMinutes?: number) => Promise<void>;
+  generate: (prompt: string, durationMinutes?: number, voiceId?: string) => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
   toggleFavorite: () => Promise<void>;
   reset: () => void;
@@ -43,7 +43,7 @@ export const useMeditationStore = create<MeditationStore>()(
         state.prompt = prompt;
       }),
 
-    generate: async (prompt, durationMinutes) => {
+    generate: async (prompt, durationMinutes, voiceId) => {
       // Re-entrancy guard: ignore double-taps on Generate while a run is in flight
       if (get().scriptStatus === 'loading' || get().audioStatus === 'loading') return;
 
@@ -76,7 +76,7 @@ export const useMeditationStore = create<MeditationStore>()(
         state.audioStatus = 'loading';
       });
       try {
-        const url = await synthesizeSpeech(sessionId);
+        const url = await synthesizeSpeech(sessionId, voiceId);
         set((state) => {
           state.audioUrl = url;
           state.audioStatus = 'success';

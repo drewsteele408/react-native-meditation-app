@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useAudioPlayer } from 'expo-audio';
 import {
   useAudioGenerationStatus,
   useGenerate,
@@ -22,6 +23,18 @@ import {
   useSetPrompt,
 } from '../../src/hooks/useMeditation';
 import { useNetworkStatus } from '../../src/hooks/useNetworkStatus';
+import { useUser } from '../../src/hooks/useAuth';
+import {
+  getVoicePreviewUrl,
+  useLoadVoices,
+  useSelectedVoiceId,
+  useSelectVoice,
+  useSelectVoiceStatus,
+  useVoices,
+  useVoicesError,
+  useVoicesStatus,
+} from '../../src/hooks/useVoices';
+import type { Voice } from '../../src/types';
 import { colors, radius } from '../../src/theme/colors';
 
 const MAX_PROMPT_LENGTH = 1000; // mirrors SEC-02
@@ -35,6 +48,21 @@ export default function PromptScreen() {
   const error = useMeditationError();
   const generate = useGenerate();
   const isOffline = useNetworkStatus();
+
+  const user = useUser();
+  const voices = useVoices();
+  const voicesStatus = useVoicesStatus();
+  const voicesError = useVoicesError();
+  const selectedVoiceId = useSelectedVoiceId();
+  const selectVoiceStatus = useSelectVoiceStatus();
+  const loadVoices = useLoadVoices();
+  const selectVoice = useSelectVoice();
+  // Screen-scoped preview player: unlike audioStore's manually-managed
+  // singleton (built for the long-lived meditation session player with
+  // signed-URL refresh logic), preview clips are short and only ever needed
+  // on this screen, so the auto-releasing useAudioPlayer hook is the right
+  // fit — it tears itself down on unmount with no manual cleanup required.
+  const previewPlayer = useAudioPlayer(null);
 
   const [durationMinutes, setDurationMinutes] = useState<number>(10);
 
@@ -62,9 +90,26 @@ export default function PromptScreen() {
     }
   }, [scriptStatus]);
 
+  useEffect(() => {
+    if (user) {
+      loadVoices(user.id);
+    }
+  }, [user, loadVoices]);
+
   const handleGenerate = () => {
     if (!canGenerate) return;
-    generate(prompt, durationMinutes);
+    generate(prompt, durationMinutes, selectedVoiceId ?? undefined);
+  };
+
+  const handleSelectVoice = (voice: Voice) => {
+    if (!user) return;
+    selectVoice(user.id, voice.id);
+  };
+
+  const handlePreviewVoice = (voice: Voice) => {
+    if (!voice.preview_audio_path) return;
+    previewPlayer.replace(getVoicePreviewUrl(voice.preview_audio_path));
+    previewPlayer.play();
   };
 
   return (
@@ -119,6 +164,66 @@ export default function PromptScreen() {
             );
           })}
         </View>
+
+        <View style={styles.voiceLabelRow}>
+          <Text style={styles.label}>Voice</Text>
+          {voicesStatus === 'loading' ? (
+            <ActivityIndicator size="small" accessibilityLabel="Loading voices" />
+          ) : null}
+        </View>
+        {voices.length > 0 ? (
+          <View style={styles.voiceRow}>
+            {voices.map((voice) => {
+              const selected = selectedVoiceId === voice.id;
+              return (
+                <View
+                  key={voice.id}
+                  style={[styles.voiceItem, selected && styles.voiceItemSelected]}
+                >
+                  <TouchableOpacity
+                    style={styles.voiceItemMain}
+                    onPress={() => handleSelectVoice(voice)}
+                    accessibilityRole="button"
+                    accessibilityLabel={voice.display_name}
+                    accessibilityState={{ selected }}
+                  >
+                    <Text
+                      style={[styles.voiceName, selected && styles.voiceNameSelected]}
+                    >
+                      {voice.display_name}
+                    </Text>
+                    {voice.description ? (
+                      <Text
+                        style={[
+                          styles.voiceDescription,
+                          selected && styles.voiceDescriptionSelected,
+                        ]}
+                      >
+                        {voice.description}
+                      </Text>
+                    ) : null}
+                  </TouchableOpacity>
+                  {voice.preview_audio_path ? (
+                    <TouchableOpacity
+                      style={styles.previewButton}
+                      onPress={() => handlePreviewVoice(voice)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Preview ${voice.display_name}`}
+                      accessibilityHint="Plays a short sample of this voice"
+                    >
+                      <Text style={styles.previewButtonText}>▶</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+        {(voicesStatus === 'error' || selectVoiceStatus === 'error') && voicesError ? (
+          <Text style={styles.errorText} accessibilityRole="alert">
+            {voicesError}
+          </Text>
+        ) : null}
 
         {isOffline ? (
           <Text style={styles.offlineText} accessibilityRole="alert">
@@ -241,6 +346,69 @@ const styles = StyleSheet.create({
   durationButtonTextSelected: {
     color: colors.onPrimary,
     fontWeight: '600',
+  },
+  voiceLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 20,
+  },
+  voiceItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexGrow: 1,
+    minWidth: 150,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  voiceItemSelected: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  voiceItemMain: {
+    flex: 1,
+    marginRight: 8,
+  },
+  voiceName: {
+    fontSize: 15,
+    color: colors.textPrimary,
+    fontWeight: '500',
+  },
+  voiceNameSelected: {
+    color: colors.onPrimary,
+    fontWeight: '600',
+  },
+  voiceDescription: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  voiceDescriptionSelected: {
+    color: colors.onPrimary,
+    opacity: 0.85,
+  },
+  previewButton: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceAlt,
+  },
+  previewButtonText: {
+    fontSize: 13,
+    color: colors.textPrimary,
   },
   offlineText: {
     color: colors.error,
