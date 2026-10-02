@@ -270,7 +270,7 @@ export default function PlaybackScreen() {
 
 // NFR-03: iOS and Android render elevated/glowing surfaces differently —
 // shadow props on iOS, `elevation` on Android. Tinted with colors.primary
-// for the play button's soft violet glow.
+// for the play button's soft blue glow.
 const platformElevation = Platform.select({
   ios: {
     shadowColor: colors.primary,

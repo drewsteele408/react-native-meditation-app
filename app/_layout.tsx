@@ -29,7 +29,7 @@ export default function RootLayout() {
 
   return (
     <>
-      {/* Dark lavender theme everywhere now uses dark backgrounds, so the
+      {/* Deep blue theme everywhere now uses dark backgrounds, so the
           status bar icons/text need to render light. */}
       <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false }}>

@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import {
+  Animated,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -17,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUser } from '../../src/hooks/useAuth';
 import { usePrompt, useSetPrompt } from '../../src/hooks/useMeditation';
 import { useLoadVoices } from '../../src/hooks/useVoices';
+import { AssistantOrb } from '../../src/components/AssistantOrb';
 import { colors, radius } from '../../src/theme/colors';
 
 const MAX_PROMPT_LENGTH = 1000; // mirrors SEC-02
@@ -37,9 +39,21 @@ export default function HomeScreen() {
   // NFR-03: cap content width on wide viewports (web/tablet) instead of
   // stretching edge-to-edge; mobile just uses most of the available width.
   const contentWidth = Math.min(width * 0.9, 480);
+  const orbSize = Math.min(contentWidth, 340);
 
   // Warm the voice catalog now so the Voice step is ready when the user
   // gets there.
+  // The Continue button always occupies its space and fades in, so the
+  // centered orb above doesn't jump when the user starts typing.
+  const continueOpacity = useRef(new Animated.Value(canContinue ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(continueOpacity, {
+      toValue: canContinue ? 1 : 0,
+      duration: 250,
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
+  }, [canContinue, continueOpacity]);
+
   useEffect(() => {
     if (user) {
       loadVoices(user.id);
@@ -79,8 +93,13 @@ export default function HomeScreen() {
           keyboardDismissMode="on-drag"
         >
           <View style={[styles.hero, { width: contentWidth }]}>
-            <Text style={styles.greeting}>Hello, {displayName}</Text>
-            <Text style={styles.subtitle}>Ready for a moment of calm?</Text>
+            <View style={[styles.orbStage, { height: orbSize }]}>
+              <View style={styles.orbLayer}>
+                <AssistantOrb size={orbSize} />
+              </View>
+              <Text style={styles.greeting}>Hello, {displayName}</Text>
+              <Text style={styles.subtitle}>Ready for a moment of calm?</Text>
+            </View>
 
             <TouchableOpacity
               style={styles.secondaryButton}
@@ -116,7 +135,12 @@ export default function HomeScreen() {
               {prompt.length}/{MAX_PROMPT_LENGTH}
             </Text>
 
-            {canContinue ? (
+            <Animated.View
+              style={{ opacity: continueOpacity }}
+              pointerEvents={canContinue ? 'auto' : 'none'}
+              accessibilityElementsHidden={!canContinue}
+              importantForAccessibility={canContinue ? 'auto' : 'no-hide-descendants'}
+            >
               <TouchableOpacity
                 style={[styles.continueButton, platformGlow]}
                 onPress={handleContinue}
@@ -125,7 +149,7 @@ export default function HomeScreen() {
               >
                 <Text style={styles.continueButtonText}>Continue</Text>
               </TouchableOpacity>
-            ) : null}
+            </Animated.View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -141,6 +165,13 @@ const platformGlow = {
   shadowRadius: 12,
   shadowOffset: { width: 0, height: 4 },
   elevation: 6,
+};
+
+// Dark halo keeps the greeting legible where it crosses the orb's arcs.
+const textShadow = {
+  textShadowColor: colors.background,
+  textShadowOffset: { width: 0, height: 1 },
+  textShadowRadius: 8,
 };
 
 const styles = StyleSheet.create({
@@ -176,18 +207,29 @@ const styles = StyleSheet.create({
   composer: {
     alignSelf: 'center',
   },
+  // Greeting sits centered on top of the animated orb.
+  orbStage: {
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  orbLayer: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   greeting: {
     fontSize: 30,
     fontWeight: '700',
     textAlign: 'center',
     color: colors.textPrimary,
+    ...textShadow,
   },
   subtitle: {
     fontSize: 16,
-    color: colors.textSecondary,
+    color: colors.textPrimary,
     textAlign: 'center',
     marginTop: 8,
-    marginBottom: 24,
+    ...textShadow,
   },
   secondaryButton: {
     borderRadius: radius.pill,
