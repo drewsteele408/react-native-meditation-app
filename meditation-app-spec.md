@@ -69,16 +69,25 @@ A cross-platform mobile application built with React Native that allows users to
 - **Forgot Password:** Password reset via email (Supabase)
 - On success, navigate to the Home screen
 
-### 5.3 Home Screen
-- Welcome message with the user's display name
-- Prominent call-to-action: "Start a Meditation"
+Creating a meditation is a three-step flow, one choice per screen: **Home (prompt) → Duration → Voice → Playback**. Every step after Home shows a "‹ Back" arrow to the previous step.
+
+### 5.3 Home Screen (step 1 — prompt)
+- Welcome message with the user's display name, a settings icon, and a **Saved Meditations** button
+- Prompt text input anchored at the bottom of the screen, with placeholder text (e.g., *"I'm feeling anxious and want to calm down…"*) and a character counter
+- Duration and voice options are **not** shown here
+- A **Continue** button appears once the prompt is non-empty; it navigates to the Duration screen
 - (Post-prototype) Recent sessions list
 
-### 5.4 Meditation Prompt Screen
-- Large text input field with placeholder text (e.g., *"I'm feeling anxious and want to calm down…"*)
-- Optional: duration selector (5 min / 10 min / 15 min / custom) — guides Gemini prompt length
-- **Generate** button
-- Loading / generation state shown while waiting for the API response
+### 5.4 Duration Screen (step 2)
+- Shows only a back arrow, a short heading, and the duration options (5 min / 10 min / 15 min) — guides Gemini prompt length
+- Tapping an option saves it and advances straight to the Voice screen; a previously picked option is highlighted when returning
+
+### 5.4a Voice Screen (step 3)
+- Scrollable list of available voices (name + description); tapping a card selects it
+- The voice the user last used is pre-selected and labeled **"Last used"**
+- Each voice has a preview button: ▶ plays a short sample and the button switches to a pause icon; tapping it again pauses the sample (tapping another voice's ▶ switches the sample to that voice)
+- **Generate** button pinned at the bottom; loading / generation state and errors are shown here while waiting for the API response
+- Back navigation is disabled while generation is in flight
 
 ### 5.5 Meditation Playback Screen
 - Displays the generated meditation script (scrollable)
@@ -120,6 +129,7 @@ A cross-platform mobile application built with React Native that allows users to
 ### 6.4 Navigation
 - FR-NAV-01: Unauthenticated users must never be able to reach `(app)` routes. Implemented with Expo Router's **`Stack.Protected`** guards in the root layout (`app/_layout.tsx`): `<Stack.Protected guard={!!session}>` wraps the `(app)` group screen and `<Stack.Protected guard={!session}>` wraps the `(auth)` group screen, with the guard condition read from `authStore`. This is the officially recommended pattern (SDK 53+) — do **not** use the older `router.replace('/login')`-inside-`useEffect` approach, and no `<PrivateRoute>` wrapper is needed. When auth state changes, the guard automatically redirects.
 - FR-NAV-02: Authenticated users must land on the Home screen after login.
+- FR-NAV-04: The create flow's intermediate steps must not remain in history once generation succeeds — the Voice screen calls `router.dismissAll()` then `router.push('/playback')`, so going back from Playback returns to Home. Opening `/duration` or `/voice` without the earlier choices (e.g. a web refresh) redirects to the missing step.
 - FR-NAV-03: The back button on the Playback screen must stop audio before navigating away. Implemented via a `useEffect` cleanup function that calls the `audioStore`'s `unload()` action (which calls `player.remove()` on the store-owned player — see §9.13) when the component unmounts.
 
 ---
@@ -310,9 +320,11 @@ app/
 │   └── register.tsx                  # Create account screen
 └── (app)/
     ├── _layout.tsx                   # App group layout (stack/tabs) — access already guarded by Stack.Protected in root
-    ├── index.tsx                     # Home screen
-    ├── prompt.tsx                    # Meditation prompt screen
+    ├── index.tsx                     # Home screen — create flow step 1 (prompt)
+    ├── duration.tsx                  # Create flow step 2 — duration picker
+    ├── voice.tsx                     # Create flow step 3 — voice picker + Generate
     ├── playback.tsx                  # Playback screen
+    ├── library.tsx                   # Saved meditations
     └── settings.tsx                  # Account / settings screen
 src/
 ├── stores/
@@ -352,6 +364,7 @@ type AsyncStatus = 'idle' | 'loading' | 'success' | 'error';
 
 interface MeditationStore {
   prompt: string;
+  durationMinutes: number | null;   // picked on the Duration step
   sessionId: string | null;
   script: string | null;
   scriptStatus: AsyncStatus;
@@ -359,7 +372,8 @@ interface MeditationStore {
   audioStatus: AsyncStatus;
   error: string | null;
   setPrompt: (prompt: string) => void;
-  generate: (prompt: string, durationMinutes?: number) => Promise<void>;
+  setDurationMinutes: (minutes: number) => void;
+  generate: (prompt: string, durationMinutes?: number, voiceId?: string) => Promise<void>;
   reset: () => void;
 }
 ```
@@ -627,7 +641,6 @@ create table usage_counters (   -- rate limiting, SEC-03
 
 - Google Sign-In (email/password only; Google auth requires additional native OAuth configuration)
 - Background ambient music
-- Voice selection by the user
 - Offline playback / cached audio
 - Push notifications / reminders
 - Social or sharing features

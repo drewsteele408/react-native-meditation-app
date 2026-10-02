@@ -9,9 +9,12 @@ interface VoiceStore {
   status: AsyncStatus;
   error: string | null;
   selectedVoiceId: string | null;
+  // The voice the user last generated with, so the picker can label it.
+  lastUsedVoiceId: string | null;
   selectVoiceStatus: AsyncStatus;
   loadVoices: (userId: string) => Promise<void>;
   selectVoice: (userId: string, voiceId: string) => void;
+  markVoiceUsed: (voiceId: string) => void;
 }
 
 export const useVoiceStore = create<VoiceStore>()(
@@ -20,6 +23,7 @@ export const useVoiceStore = create<VoiceStore>()(
     status: 'idle',
     error: null,
     selectedVoiceId: null,
+    lastUsedVoiceId: null,
     selectVoiceStatus: 'idle',
 
     loadVoices: async (userId) => {
@@ -46,6 +50,7 @@ export const useVoiceStore = create<VoiceStore>()(
             preferredVoiceId !== null && voices.some((v) => v.id === preferredVoiceId);
           if (preferredIsActive) {
             state.selectedVoiceId = preferredVoiceId;
+            state.lastUsedVoiceId = preferredVoiceId;
           } else if (state.selectedVoiceId === null && voices.length > 0) {
             state.selectedVoiceId = voices[0].id;
           }
@@ -83,5 +88,10 @@ export const useVoiceStore = create<VoiceStore>()(
           });
         });
     },
+
+    markVoiceUsed: (voiceId) =>
+      set((state) => {
+        state.lastUsedVoiceId = voiceId;
+      }),
   }))
 );

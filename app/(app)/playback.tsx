@@ -107,7 +107,7 @@ export default function PlaybackScreen() {
   // calls player.remove() and swaps in a fresh player. Also reset the
   // meditation session here — spec §9.7 documents reset() as existing "for
   // when the user navigates away from playback" — so returning to the
-  // Prompt screen later starts from a clean idle state instead of
+  // Home screen later starts from a clean idle state instead of
   // immediately re-navigating to a stale finished session.
   useEffect(() => {
     return () => {

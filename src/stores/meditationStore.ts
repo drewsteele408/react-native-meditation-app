@@ -7,6 +7,8 @@ import type { AsyncStatus } from '../types';
 
 interface MeditationStore {
   prompt: string;
+  // Picked on the Duration step; null until the user chooses one.
+  durationMinutes: number | null;
   sessionId: string | null;
   script: string | null;
   scriptStatus: AsyncStatus;
@@ -16,6 +18,7 @@ interface MeditationStore {
   favoriteStatus: AsyncStatus;
   error: string | null;
   setPrompt: (prompt: string) => void;
+  setDurationMinutes: (minutes: number) => void;
   generate: (prompt: string, durationMinutes?: number, voiceId?: string) => Promise<void>;
   loadSession: (sessionId: string) => Promise<void>;
   toggleFavorite: () => Promise<void>;
@@ -24,6 +27,7 @@ interface MeditationStore {
 
 const initialState = {
   prompt: '',
+  durationMinutes: null as number | null,
   sessionId: null,
   script: null,
   scriptStatus: 'idle' as AsyncStatus,
@@ -41,6 +45,11 @@ export const useMeditationStore = create<MeditationStore>()(
     setPrompt: (prompt) =>
       set((state) => {
         state.prompt = prompt;
+      }),
+
+    setDurationMinutes: (minutes) =>
+      set((state) => {
+        state.durationMinutes = minutes;
       }),
 
     generate: async (prompt, durationMinutes, voiceId) => {

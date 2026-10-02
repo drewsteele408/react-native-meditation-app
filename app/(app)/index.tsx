@@ -1,20 +1,56 @@
-import { StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { useEffect } from 'react';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUser } from '../../src/hooks/useAuth';
+import { usePrompt, useSetPrompt } from '../../src/hooks/useMeditation';
+import { useLoadVoices } from '../../src/hooks/useVoices';
 import { colors, radius } from '../../src/theme/colors';
 
+const MAX_PROMPT_LENGTH = 1000; // mirrors SEC-02
+
+// Step 1 of the create-meditation flow: Home (prompt) → Duration → Voice →
+// Playback. Only the prompt is collected here.
 export default function HomeScreen() {
   const user = useUser();
+  const prompt = usePrompt();
+  const setPrompt = useSetPrompt();
+  const loadVoices = useLoadVoices();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
   const displayName = user?.user_metadata?.display_name ?? 'there';
+  const canContinue = prompt.trim().length > 0;
 
   // NFR-03: cap content width on wide viewports (web/tablet) instead of
   // stretching edge-to-edge; mobile just uses most of the available width.
   const contentWidth = Math.min(width * 0.9, 480);
+
+  // Warm the voice catalog now so the Voice step is ready when the user
+  // gets there.
+  useEffect(() => {
+    if (user) {
+      loadVoices(user.id);
+    }
+  }, [user, loadVoices]);
+
+  const handleContinue = () => {
+    if (!canContinue) return;
+    Keyboard.dismiss();
+    router.push('/duration');
+  };
 
   return (
     <LinearGradient
@@ -32,28 +68,67 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.content, { width: contentWidth }]}>
-        <Text style={styles.greeting}>Hello, {displayName}</Text>
-        <Text style={styles.subtitle}>Ready for a moment of calm?</Text>
-
-        <TouchableOpacity
-          style={[styles.ctaButton, platformGlow]}
-          onPress={() => router.push('/prompt')}
-          accessibilityRole="button"
-          accessibilityLabel="Start a meditation"
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 24 }]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
         >
-          <Text style={styles.ctaButtonText}>Start a Meditation</Text>
-        </TouchableOpacity>
+          <View style={[styles.hero, { width: contentWidth }]}>
+            <Text style={styles.greeting}>Hello, {displayName}</Text>
+            <Text style={styles.subtitle}>Ready for a moment of calm?</Text>
 
-        <TouchableOpacity
-          style={styles.secondaryButton}
-          onPress={() => router.push('/library')}
-          accessibilityRole="button"
-          accessibilityLabel="View saved meditations"
-        >
-          <Text style={styles.secondaryButtonText}>Saved Meditations</Text>
-        </TouchableOpacity>
-      </View>
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={() => router.push('/library')}
+              accessibilityRole="button"
+              accessibilityLabel="View saved meditations"
+            >
+              <Text style={styles.secondaryButtonText}>Saved Meditations</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.composer, { width: contentWidth }]}>
+            <Text style={styles.title}>What&apos;s on your mind?</Text>
+
+            <TextInput
+              style={styles.input}
+              value={prompt}
+              onChangeText={setPrompt}
+              placeholder="I'm feeling anxious and want to calm down…"
+              placeholderTextColor={colors.placeholder}
+              multiline
+              maxLength={MAX_PROMPT_LENGTH}
+              textAlignVertical="top"
+              accessibilityLabel="Meditation prompt"
+              accessibilityHint="Describe how you're feeling or what you want from this meditation"
+            />
+            <Text
+              style={[
+                styles.charCount,
+                prompt.length > MAX_PROMPT_LENGTH * 0.9 && styles.charCountWarning,
+              ]}
+            >
+              {prompt.length}/{MAX_PROMPT_LENGTH}
+            </Text>
+
+            {canContinue ? (
+              <TouchableOpacity
+                style={[styles.continueButton, platformGlow]}
+                onPress={handleContinue}
+                accessibilityRole="button"
+                accessibilityLabel="Continue to choose a duration"
+              >
+                <Text style={styles.continueButtonText}>Continue</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </LinearGradient>
   );
 }
@@ -84,10 +159,22 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: colors.textPrimary,
   },
-  content: {
+  flex: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  // Hero fills the space above the composer so the composer sits at the
+  // bottom of the screen; once content overflows, the whole page scrolls.
+  hero: {
     flex: 1,
     alignSelf: 'center',
     justifyContent: 'center',
+    paddingVertical: 32,
+  },
+  composer: {
+    alignSelf: 'center',
   },
   greeting: {
     fontSize: 30,
@@ -100,18 +187,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     textAlign: 'center',
     marginTop: 8,
-    marginBottom: 40,
-  },
-  ctaButton: {
-    backgroundColor: colors.primary,
-    borderRadius: radius.pill,
-    paddingVertical: 18,
-    alignItems: 'center',
-  },
-  ctaButtonText: {
-    color: colors.onPrimary,
-    fontSize: 18,
-    fontWeight: '600',
+    marginBottom: 24,
   },
   secondaryButton: {
     borderRadius: radius.pill,
@@ -125,5 +201,44 @@ const styles = StyleSheet.create({
     color: colors.accentLight,
     fontSize: 16,
     fontWeight: '500',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '600',
+    marginBottom: 12,
+    color: colors.textPrimary,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    minHeight: 100,
+    color: colors.textPrimary,
+  },
+  charCount: {
+    alignSelf: 'flex-end',
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  charCountWarning: {
+    color: colors.error,
+    fontWeight: '600',
+  },
+  continueButton: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingVertical: 18,
+    alignItems: 'center',
+  },
+  continueButtonText: {
+    color: colors.onPrimary,
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

@@ -28,7 +28,7 @@ describe('meditationStore.generate — happy path', () => {
 
     const state = useMeditationStore.getState();
     expect(geminiRepository.generateScript).toHaveBeenCalledWith('I feel anxious', 10);
-    expect(elevenLabsRepository.synthesizeSpeech).toHaveBeenCalledWith('session-123');
+    expect(elevenLabsRepository.synthesizeSpeech).toHaveBeenCalledWith('session-123', undefined);
     expect(state.scriptStatus).toBe('success');
     expect(state.sessionId).toBe('session-123');
     expect(state.script).toBe('A calm meditation...');
@@ -234,10 +234,21 @@ describe('meditationStore.toggleFavorite', () => {
   });
 });
 
+describe('meditationStore.setDurationMinutes', () => {
+  it('stores the picked duration', () => {
+    expect(useMeditationStore.getState().durationMinutes).toBeNull();
+
+    useMeditationStore.getState().setDurationMinutes(5);
+
+    expect(useMeditationStore.getState().durationMinutes).toBe(5);
+  });
+});
+
 describe('meditationStore.reset', () => {
   it('clears generation state back to initial values', () => {
     useMeditationStore.setState({
       prompt: 'something',
+      durationMinutes: 15,
       sessionId: 'session-123',
       script: 'a script',
       scriptStatus: 'success',
@@ -251,6 +262,7 @@ describe('meditationStore.reset', () => {
 
     const state = useMeditationStore.getState();
     expect(state.prompt).toBe('');
+    expect(state.durationMinutes).toBeNull();
     expect(state.sessionId).toBeNull();
     expect(state.script).toBeNull();
     expect(state.scriptStatus).toBe('idle');

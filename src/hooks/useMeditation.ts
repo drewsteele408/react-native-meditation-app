@@ -1,6 +1,7 @@
 import { useMeditationStore } from '../stores/meditationStore';
 
 export const usePrompt = () => useMeditationStore((state) => state.prompt);
+export const useDurationMinutes = () => useMeditationStore((state) => state.durationMinutes);
 export const useSessionId = () => useMeditationStore((state) => state.sessionId);
 export const useScript = () => useMeditationStore((state) => state.script);
 export const useScriptStatus = () => useMeditationStore((state) => state.scriptStatus);
@@ -10,6 +11,7 @@ export const useMeditationError = () => useMeditationStore((state) => state.erro
 export const useIsFavorite = () => useMeditationStore((state) => state.isFavorite);
 export const useFavoriteStatus = () => useMeditationStore((state) => state.favoriteStatus);
 export const useSetPrompt = () => useMeditationStore((state) => state.setPrompt);
+export const useSetDurationMinutes = () => useMeditationStore((state) => state.setDurationMinutes);
 export const useGenerate = () => useMeditationStore((state) => state.generate);
 export const useLoadSession = () => useMeditationStore((state) => state.loadSession);
 export const useToggleFavorite = () => useMeditationStore((state) => state.toggleFavorite);
